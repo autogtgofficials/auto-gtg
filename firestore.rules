@@ -1,0 +1,89 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 0. Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // --- USERS ---
+    match /users/{userId} {
+      function isValidUser(data) {
+        return data.uid == request.auth.uid &&
+               data.email is string && data.email.size() <= 200 &&
+               data.role in ['customer', 'partner', 'admin'] &&
+               data.displayName is string && data.displayName.size() <= 100;
+      }
+
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isOwner(userId) && isValidUser(incoming()) && (incoming().role != 'admin' || request.auth.token.email == 'autogtgofficials@gmail.com');
+      allow update: if isOwner(userId) && isValidUser(incoming()) && (
+        incoming().role == existing().role // Cannot change own role
+      ) || isAdmin();
+    }
+
+    // --- JOBS ---
+    match /jobs/{jobId} {
+      function isValidJob(data) {
+        return data.id is string && data.id.size() <= 100 &&
+               data.customerName is string && data.customerName.size() <= 100 &&
+               data.customerUid is string &&
+               data.type in ['scheduled', 'rsa'] &&
+               data.status in ['pending', 'accepted', 'en-route', 'live', 'completed', 'declined'];
+      }
+
+      allow get: if isSignedIn() && (resource.data.customerUid == request.auth.uid || resource.data.partnerUid == request.auth.uid || isAdmin());
+      allow list: if isSignedIn() && (resource.data.customerUid == request.auth.uid || resource.data.partnerUid == request.auth.uid || isAdmin());
+      
+      allow create: if isSignedIn() && isValidJob(incoming()) && incoming().customerUid == request.auth.uid;
+      
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (isOwner(existing().customerUid) && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'vehicle', 'phone']) && incoming().status == 'declined') ||
+        (existing().partnerUid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'eta'])) ||
+        (existing().status == 'pending' && !('partnerUid' in existing()) && incoming().diff(existing()).affectedKeys().hasOnly(['partnerUid', 'status', 'partner']))
+      );
+    }
+
+    // --- PARTNERS ---
+    match /partners/{partnerId} {
+      function isValidPartner(data) {
+        return data.id is string && data.id.size() <= 100 &&
+               data.name is string && data.name.size() <= 200 &&
+               data.status in ['online', 'busy', 'offline', 'pending_verification'];
+      }
+
+      allow read: if true; // Public listings
+      allow create: if isSignedIn() && isValidPartner(incoming()) && incoming().uid == request.auth.uid;
+      allow update: if isAdmin() || (isSignedIn() && existing().uid == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'timing', 'phone']));
+    }
+  }
+}

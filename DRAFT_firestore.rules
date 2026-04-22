@@ -1,0 +1,120 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // --- 0. Global Safety ---
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- 1. Helpers ---
+    function isSignedIn() { return request.auth != null; }
+    function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    function isAdmin() { 
+      return isVerified() && (
+        request.auth.token.email == 'autogtgofficials@gmail.com' || 
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    function isPartner() {
+      return isVerified() && exists(/databases/$(database)/documents/partners/$(request.auth.uid));
+    }
+
+    // --- 2. Users Collection ---
+    match /users/{userId} {
+      function isValidUser(data) {
+        return data.uid == userId
+          && data.email is string && data.email.size() <= 200
+          && data.displayName is string && data.displayName.size() <= 100
+          && data.role in ['customer', 'partner', 'admin']
+          && data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'createdAt'])
+          && data.keys().size() <= 6;
+      }
+
+      allow get: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow list: if isAdmin();
+      
+      allow create: if isSignedIn() 
+        && request.auth.uid == userId 
+        && isValidUser(incoming())
+        && incoming().role == 'customer'; // Default role for self-reg
+
+      allow update: if (
+        isSignedIn() && request.auth.uid == userId && (
+          isValidUser(incoming()) && 
+          incoming().role == existing().role // Prevent self-elevation
+        )
+      ) || isAdmin();
+    }
+
+    // --- 3. Jobs Collection ---
+    match /jobs/{jobId} {
+      function isValidJob(data) {
+        return isValidId(data.id)
+          && data.customerName is string && data.customerName.size() <= 100
+          && data.status in ['pending', 'accepted', 'en-route', 'live', 'completed', 'declined']
+          && data.type in ['scheduled', 'rsa']
+          && (data.fee is number || !data.keys().contains('fee'))
+          && data.createdAt is string
+          && data.keys().hasAll(['id', 'customerName', 'status', 'type', 'createdAt']);
+      }
+
+      // Secure list queries
+      allow list: if isSignedIn() && (
+        isAdmin() ||
+        resource.data.customerName == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName ||
+        resource.data.partnerUid == request.auth.uid
+      );
+
+      allow get: if isSignedIn() && (
+        isAdmin() ||
+        resource.data.customerName == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName ||
+        resource.data.partnerUid == request.auth.uid
+      );
+
+      allow create: if isSignedIn() && isValidJob(incoming());
+
+      allow update: if (
+        isSignedIn() && isValidJob(incoming()) && (
+          isAdmin() ||
+          // Partner Actions (Accept/Complete)
+          (incoming().partnerUid == request.auth.uid && isPartner() && 
+           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'partner', 'partnerUid', 'eta'])) ||
+          // Customer Actions (Cancel)
+          (resource.data.customerName == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.displayName &&
+           existing().status == 'pending' && incoming().status == 'declined')
+        )
+      );
+    }
+
+    // --- 4. Partners Collection ---
+    match /partners/{partnerId} {
+      function isValidPartner(data) {
+        return isValidId(data.id)
+          && data.name is string && data.name.size() <= 100
+          && data.status in ['online', 'offline', 'pending_verification']
+          && data.keys().hasAll(['id', 'name', 'status', 'createdAt']);
+      }
+
+      allow list: if true;
+      allow get: if true;
+
+      allow create: if isSignedIn() 
+        && isValidPartner(incoming()) 
+        && incoming().uid == request.auth.uid
+        && incoming().status == 'pending_verification'; // Must be verified by admin
+
+      allow update: if (
+        isSignedIn() && isValidPartner(incoming()) && (
+          isAdmin() ||
+          (existing().uid == request.auth.uid && 
+           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'services', 'timing', 'types', 'typeDesc', 'initials']))
+        )
+      );
+    }
+  }
+}

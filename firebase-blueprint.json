@@ -1,0 +1,72 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Metadata for authenticated users",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["customer", "partner", "admin"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Job": {
+      "title": "Service Job",
+      "description": "A booking or emergency service request",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerUid": { "type": "string" },
+        "phone": { "type": "string" },
+        "vehicle": { "type": "string" },
+        "serviceName": { "type": "string" },
+        "type": { "type": "string", "enum": ["scheduled", "rsa"] },
+        "status": { "type": "string", "enum": ["pending", "accepted", "en-route", "live", "completed", "declined"] },
+        "fee": { "type": "number" },
+        "partner": { "type": "string" },
+        "partnerUid": { "type": "string" },
+        "location": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "customerName", "customerUid", "status", "type"]
+    },
+    "Partner": {
+      "title": "Service Partner",
+      "description": "Mechanics or garages providing services",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "uid": { "type": "string" },
+        "name": { "type": "string" },
+        "owner": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "location": { "type": "string" },
+        "status": { "type": "string", "enum": ["online", "busy", "offline", "pending_verification"] },
+        "types": { "type": "array", "items": { "type": "string" } },
+        "timing": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "status"]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "User profile documents"
+    },
+    "jobs/{jobId}": {
+      "schema": "Job",
+      "description": "Individual service jobs"
+    },
+    "partners/{partnerId}": {
+      "schema": "Partner",
+      "description": "Registered service partners"
+    }
+  }
+}
